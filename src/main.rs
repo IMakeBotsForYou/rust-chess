@@ -1,0 +1,543 @@
+use std::collections::HashMap;
+use std::fmt;
+use std::io::Write;
+
+#[derive(PartialEq)]
+enum Turn {
+    Black,
+    White,
+}
+
+impl Turn {
+    fn toggle(self) -> Turn {
+        match self {
+            Turn::White => Turn::Black,
+            Turn::Black => Turn::White,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum Piece {
+    Empty,
+
+    // White pieces
+    WhiteKing,
+    WhiteQueen,
+    WhiteRook,
+    WhiteBishop,
+    WhiteKnight,
+    WhitePawn,
+
+    // Black pieces
+    BlackKing,
+    BlackQueen,
+    BlackRook,
+    BlackBishop,
+    BlackKnight,
+    BlackPawn,
+}
+
+impl Piece {
+    fn is_white(&self) -> bool {
+        matches!(
+            self,
+            Piece::WhitePawn
+                | Piece::WhiteKnight
+                | Piece::WhiteBishop
+                | Piece::WhiteRook
+                | Piece::WhiteQueen
+                | Piece::WhiteKing
+        )
+    }
+
+    fn is_black(&self) -> bool {
+        matches!(
+            self,
+            Piece::BlackPawn
+                | Piece::BlackKnight
+                | Piece::BlackBishop
+                | Piece::BlackRook
+                | Piece::BlackQueen
+                | Piece::BlackKing
+        )
+    }
+
+    fn is_pawn(&self) -> bool {
+        matches!(self, Piece::BlackPawn | Piece::WhitePawn)
+    }
+}
+
+lazy_static::lazy_static! {
+    static ref MOVES: HashMap<Piece, Vec<(i8, i8)>> = HashMap::from([
+        (Piece::WhiteKing, vec![
+            (-1, -1), (-1, 0), (-1, 1),
+            ( 0, -1),          ( 0, 1),
+            ( 1, -1), ( 1, 0), ( 1, 1),
+        ]),
+        (Piece::BlackKing, vec![
+            (-1, -1), (-1, 0), (-1, 1),
+            ( 0, -1),          ( 0, 1),
+            ( 1, -1), ( 1, 0), ( 1, 1),
+        ]),
+        (Piece::WhiteKnight, vec![
+            (-2, -1), (-2,  1), (-1, -2), (-1, 2),
+            ( 1, -2), ( 1,  2), ( 2, -1), ( 2, 1),
+        ]),
+        (Piece::BlackKnight, vec![
+            (-2, -1), (-2,  1), (-1, -2), (-1, 2),
+            ( 1, -2), ( 1,  2), ( 2, -1), ( 2, 1),
+        ]),
+        // Pawns require special logic and are generally excluded from simple MOVE maps
+    ]);
+}
+
+fn generate_sliding_moves(
+    board: &[[Piece; 8]; 8],
+    piece: Piece,
+    start: (usize, usize),
+    directions: &[(i8, i8)],
+) -> Vec<(usize, usize)> {
+    let mut result: Vec<(usize, usize)> = Vec::new();
+    let (start_row, start_col) = (start.0 as i8, start.1 as i8);
+
+    for &(dr, dc) in directions {
+        let mut r = start_row + dr;
+        let mut c = start_col + dc;
+
+        while (0..8).contains(&r) && (0..8).contains(&c) {
+            let r_usize = r as usize;
+            let c_usize = c as usize;
+            let target = board[r_usize][c_usize];
+
+            if target == Piece::Empty {
+                result.push((r_usize, c_usize));
+            } else {
+                if piece.is_white() != target.is_white() {
+                    result.push((r_usize, c_usize));
+                }
+                break;
+            }
+
+            r += dr;
+            c += dc;
+        }
+    }
+
+    result
+}
+
+fn generate_pawn_moves(
+    board: &[[Piece; 8]; 8],
+    piece: Piece,
+    start: (usize, usize),
+) -> Vec<(usize, usize)> {
+    let mut moves = Vec::new();
+    let (row, col) = start;
+
+    let (dir, start_row) = match piece {
+        Piece::WhitePawn => (-1, 6),
+        Piece::BlackPawn => (1, 1),
+        _ => return moves,
+    };
+
+    let new_row = row as i8 + dir;
+    if (0..8).contains(&new_row) {
+        // Forward 1
+        if board[new_row as usize][col] == Piece::Empty {
+            moves.push((new_row as usize, col));
+
+            // Forward 2 from starting row
+            if row == start_row {
+                let two_row = row as i8 + 2 * dir;
+                if (0..8).contains(&new_row) && board[two_row as usize][col] == Piece::Empty {
+                    moves.push((two_row as usize, col));
+                }
+            }
+        }
+
+        // Captures
+        for dc in [-1, 1] {
+            let new_col = col as i8 + dc;
+            if (0..8).contains(&new_col) {
+                let target = board[new_row as usize][new_col as usize];
+                if target != Piece::Empty && target.is_black() != piece.is_black() {
+                    moves.push((new_row as usize, new_col as usize));
+                }
+            }
+        }
+    }
+
+    moves
+}
+
+fn get_piece_moves(
+    board: &[[Piece; 8]; 8],
+    attacks_board: &[[Attacked; 8]; 8],
+    piece: Piece,
+    pos: (usize, usize),
+) -> Vec<(usize, usize)> {
+    use Piece::*;
+
+    match piece {
+        WhitePawn | BlackPawn => generate_pawn_moves(board, piece, pos),
+
+        WhiteRook | BlackRook => {
+            generate_sliding_moves(board, piece, pos, &[(1, 0), (-1, 0), (0, 1), (0, -1)])
+        }
+        WhiteBishop | BlackBishop => {
+            generate_sliding_moves(board, piece, pos, &[(1, 1), (-1, -1), (1, -1), (-1, 1)])
+        }
+        WhiteQueen | BlackQueen => generate_sliding_moves(
+            board,
+            piece,
+            pos,
+            &[
+                (1, 0),
+                (-1, 0),
+                (0, 1),
+                (0, -1),
+                (1, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+            ],
+        ),
+        _ => MOVES.get(&piece).map_or(vec![], |deltas| {
+            deltas
+                .iter()
+                .filter_map(|(delta_row, delta_column)| {
+                    let row = pos.0 as i8 + delta_row;
+                    let column = pos.1 as i8 + delta_column;
+                    if (0..8).contains(&row) && (0..8).contains(&column) {
+                        let target = board[row as usize][column as usize];
+                        let target_attacked = attacks_board[row as usize][column as usize];
+                        let piece_is_white = piece.is_white();
+                        let target_is_white = target.is_white();
+                        let is_safe = !matches!(
+                            (piece_is_white, target_attacked),
+                            (false, Attacked::ByWhite | Attacked::ByBoth)
+                                | (true, Attacked::ByBlack | Attacked::ByBoth)
+                        );
+                        if (target == Piece::Empty || target_is_white != piece_is_white) && is_safe
+                        {
+                            Some((row as usize, column as usize))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }),
+    }
+}
+
+impl fmt::Display for Piece {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let symbol = match self {
+            Piece::Empty => "·",
+            Piece::WhiteKing => "♔",
+            Piece::WhiteQueen => "♕",
+            Piece::WhiteRook => "♖",
+            Piece::WhiteBishop => "♗",
+            Piece::WhiteKnight => "♘",
+            Piece::WhitePawn => "♙",
+            Piece::BlackKing => "♚",
+            Piece::BlackQueen => "♛",
+            Piece::BlackRook => "♜",
+            Piece::BlackBishop => "♝",
+            Piece::BlackKnight => "♞",
+            Piece::BlackPawn => "♟︎",
+        };
+        write!(f, "{}", symbol)
+    }
+}
+
+fn from_letters_to_numbers(input: &str) -> Option<(usize, usize)> {
+    if input.len() != 2 {
+        return None;
+    }
+
+    let mut chars = input.chars();
+    let col_char = chars.next()?.to_ascii_uppercase();
+    let row_char = chars.next()?;
+    println!("{col_char} {row_char}");
+    let col = (col_char as u8).checked_sub(b'@')? as usize;
+    let row = (row_char.to_digit(10)? as usize).checked_sub(1)?;
+    println!("{col} {row}");
+    if !(0..8).contains(&row) || !(0..8).contains(&row) {
+        None
+    } else {
+        Some((7 - row, col - 1)) // flip row to match board indexing
+    }
+}
+
+// fn get_piece(board: &[[Piece; 8]; 8], row: usize, col: usize) -> Piece {
+//     board[row][col]
+// }
+
+// fn is_occupied(board: &[[Piece; 8]; 8], row: usize, col: usize) -> bool {
+//     board[row][col] != Piece::Empty
+// }
+fn recalculate_attacked(board: &[[Piece; 8]; 8], attacks_board: &mut [[Attacked; 8]; 8]) {
+    // Reset the attacks board to Safe
+    for row in attacks_board.iter_mut() {
+        for cell in row.iter_mut() {
+            *cell = Attacked::Safe;
+        }
+    }
+
+    for (row_idx, row) in board.iter().enumerate() {
+        for (col_idx, &piece) in row.iter().enumerate() {
+            if piece == Piece::Empty {
+                continue;
+            }
+
+            let attacks = if piece.is_pawn() {
+                let mut targets = Vec::new();
+                let attacked_by = if piece.is_white() {
+                    // White pawns attack diagonally forward (up)
+                    if row_idx > 0 {
+                        let r = row_idx - 1;
+                        if col_idx > 0 {
+                            targets.push((r, col_idx - 1));
+                        }
+                        if col_idx < 7 {
+                            targets.push((r, col_idx + 1));
+                        }
+                    }
+                    Attacked::ByWhite
+                } else {
+                    // Black pawns attack diagonally forward (down)
+                    if row_idx < 7 {
+                        let r = row_idx + 1;
+                        if col_idx > 0 {
+                            targets.push((r, col_idx - 1));
+                        }
+                        if col_idx < 7 {
+                            targets.push((r, col_idx + 1));
+                        }
+                    }
+                    Attacked::ByBlack
+                };
+                (targets, attacked_by)
+            } else {
+                let moves = get_piece_moves(board, attacks_board, piece, (row_idx, col_idx));
+                let attacked_by = if piece.is_white() {
+                    Attacked::ByWhite
+                } else {
+                    Attacked::ByBlack
+                };
+                (moves, attacked_by)
+            };
+
+            for (row, col) in attacks.0 {
+                attacks_board[row][col] = match (attacks_board[row][col], attacks.1) {
+                    (Attacked::Safe, atk) => atk,
+                    (Attacked::ByWhite, Attacked::ByBlack)
+                    | (Attacked::ByBlack, Attacked::ByWhite) => Attacked::ByBoth,
+                    (existing, _) => existing,
+                };
+            }
+        }
+    }
+}
+
+fn print_board(
+    board: &[[Piece; 8]; 8],
+    selected: Option<(usize, usize)>,
+    moves: Option<&Vec<(usize, usize)>>,
+) {
+    // ANSI escape codes for colors
+    let orange_bg = "\x1b[48;5;208m"; // orange
+    let red_bg = "\x1b[41m"; // red
+    let reset = "\x1b[0m";
+
+    println!();
+
+    for row in 0..8 {
+        print!("{} ", 8 - row); // Print rank (8 to 1)
+        for col in 0..8 {
+            let coord = (row, col);
+            let cell = board[row][col];
+            let symbol = format!("{}", cell);
+
+            if Some(coord) == selected {
+                print!("{} {} {}", orange_bg, symbol, reset);
+            } else if moves.is_some_and(|m| m.contains(&coord)) {
+                print!("{} {} {}", red_bg, symbol, reset);
+            } else {
+                print!(" {} ", symbol);
+            }
+        }
+        println!();
+    }
+
+    // Print file labels (A to H)
+    print!("  ");
+    for c in b'A'..=b'H' {
+        print!(" {} ", c as char);
+    }
+    println!("\n");
+}
+
+#[derive(Copy, Clone, Debug)]
+enum Attacked {
+    Safe,
+    ByWhite,
+    ByBlack,
+    ByBoth,
+}
+
+fn main() {
+    let mut attacks_board: [[Attacked; 8]; 8] = [
+        [Attacked::Safe; 8], // 8
+        [Attacked::Safe; 8], // 7
+        [Attacked::Safe; 8], // 6
+        [Attacked::Safe; 8], // 5
+        [Attacked::Safe; 8], // 4
+        [Attacked::Safe; 8], // 3
+        [Attacked::Safe; 8], // 2
+        [Attacked::Safe; 8], // 1
+    ];
+
+    let mut board: [[Piece; 8]; 8] = [
+        [
+            Piece::BlackRook,
+            Piece::BlackKnight,
+            Piece::BlackBishop,
+            Piece::BlackQueen,
+            Piece::BlackKing,
+            Piece::BlackBishop,
+            Piece::BlackKnight,
+            Piece::BlackRook,
+        ],
+        [Piece::BlackPawn; 8],
+        [Piece::Empty; 8],
+        [Piece::Empty; 8],
+        [Piece::Empty; 8],
+        [Piece::Empty; 8],
+        [Piece::WhitePawn; 8],
+        [
+            Piece::WhiteRook,
+            Piece::WhiteKnight,
+            Piece::WhiteBishop,
+            Piece::WhiteQueen,
+            Piece::WhiteKing,
+            Piece::WhiteBishop,
+            Piece::WhiteKnight,
+            Piece::WhiteRook,
+        ],
+    ];
+    recalculate_attacked(&board, &mut attacks_board);
+    let mut turn = Turn::Black;
+    print_board(&board, None, None);
+
+    loop {
+        // Clear screen
+        print!("\x1B[2J\x1B[1;1H");
+        std::io::stdout().flush().unwrap();
+
+        println!(
+            "{} to move.",
+            match turn {
+                Turn::White => "White",
+                Turn::Black => "Black",
+            }
+        );
+
+        // Input loop for selecting a valid piece
+        let (selected_row, selected_col, piece, moves): (usize, usize, Piece, Vec<(usize, usize)>) = loop {
+            print_board(&board, None, None);
+            print!("Select a piece (e.g., E2) or 'exit': ");
+            std::io::stdout().flush().unwrap();
+
+            let mut input = String::new();
+            if std::io::stdin().read_line(&mut input).is_ok() {
+                let input = input.trim();
+
+                if input.eq_ignore_ascii_case("exit") {
+                    return;
+                }
+
+                if let Some((row, col)) = from_letters_to_numbers(input) {
+                    let piece = board[row][col];
+                    let is_white = piece.is_white();
+                    if piece == Piece::Empty {
+                        println!("There's no piece on that square.");
+                        continue;
+                    }
+                    if (turn == Turn::White && !is_white) || (turn == Turn::Black && is_white) {
+                        println!("{piece}");
+                        println!("That piece belongs to the opponent.");
+                        continue;
+                    }
+
+                    let legal_moves = get_piece_moves(&board, &attacks_board, piece, (row, col));
+                    if legal_moves.is_empty() {
+                        println!("That piece has no legal moves.");
+                        continue;
+                    }
+
+                    break (row, col, piece, legal_moves);
+                } else {
+                    println!("Invalid input. Please enter something like E2.");
+                }
+            }
+        };
+
+        // Show the board with selected piece and possible moves
+        print!("\x1B[2J\x1B[1;1H");
+        print_board(&board, Some((selected_row, selected_col)), Some(&moves));
+
+        println!(
+            "Selected: {} at {}{}",
+            piece,
+            (b'A' + selected_col as u8) as char,
+            8 - selected_row
+        );
+        println!(
+            "Possible moves: {:?}",
+            moves
+                .iter()
+                .map(|(r, c)| format!("{}{}", (b'A' + *c as u8) as char, 8 - *r))
+                .collect::<Vec<_>>()
+        );
+
+        print!("Do you want to move this piece? (y/n): ");
+        std::io::stdout().flush().unwrap();
+
+        let mut confirm = String::new();
+        std::io::stdin().read_line(&mut confirm).unwrap();
+
+        if confirm.trim().eq_ignore_ascii_case("y") {
+            // Input loop for choosing destination
+            loop {
+                print!("Enter destination square: ");
+                std::io::stdout().flush().unwrap();
+
+                let mut dest_input = String::new();
+                std::io::stdin().read_line(&mut dest_input).unwrap();
+
+                if let Some((dest_row, dest_col)) = from_letters_to_numbers(dest_input.trim()) {
+                    if moves.contains(&(dest_row, dest_col)) {
+                        // Execute move
+                        board[dest_row][dest_col] = piece;
+                        board[selected_row][selected_col] = Piece::Empty;
+                        recalculate_attacked(&board, &mut attacks_board);
+                        break;
+                    } else {
+                        println!("Invalid destination.");
+                    }
+                } else {
+                    println!("Invalid input.");
+                }
+            }
+
+            // Switch turn after valid move
+            turn = turn.toggle();
+        }
+    }
+}

@@ -1,0 +1,9 @@
+[package]
+name = "a"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = "0.9.1"
+windows-sys = { version = "0.59.0", features = ["Win32_Foundation"] }
+lazy_static = "1.4"
