@@ -1,3 +1,4 @@
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
@@ -6,6 +7,21 @@ use std::io::Write;
 enum Turn {
     Black,
     White,
+}
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum Color {
+    White,
+    Black,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+enum PieceType {
+    King,
+    Queen,
+    Rook,
+    Bishop,
+    Knight,
+    Pawn,
 }
 
 impl Turn {
@@ -16,89 +32,66 @@ impl Turn {
         }
     }
 }
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-enum Piece {
-    Empty,
-
-    // White pieces
-    WhiteKing,
-    WhiteQueen,
-    WhiteRook,
-    WhiteBishop,
-    WhiteKnight,
-    WhitePawn,
-
-    // Black pieces
-    BlackKing,
-    BlackQueen,
-    BlackRook,
-    BlackBishop,
-    BlackKnight,
-    BlackPawn,
+struct Piece {
+    _type: PieceType,
+    color: Color,
 }
 
 impl Piece {
     fn is_white(&self) -> bool {
-        matches!(
-            self,
-            Piece::WhitePawn
-                | Piece::WhiteKnight
-                | Piece::WhiteBishop
-                | Piece::WhiteRook
-                | Piece::WhiteQueen
-                | Piece::WhiteKing
-        )
+        self.color == Color::White
     }
 
     fn is_black(&self) -> bool {
-        matches!(
-            self,
-            Piece::BlackPawn
-                | Piece::BlackKnight
-                | Piece::BlackBishop
-                | Piece::BlackRook
-                | Piece::BlackQueen
-                | Piece::BlackKing
-        )
+        self.color == Color::Black
     }
 
     fn is_pawn(&self) -> bool {
-        matches!(self, Piece::BlackPawn | Piece::WhitePawn)
+        self._type == PieceType::Pawn
     }
 }
 
-lazy_static::lazy_static! {
-    static ref MOVES: HashMap<Piece, Vec<(i8, i8)>> = HashMap::from([
-        (Piece::WhiteKing, vec![
-            (-1, -1), (-1, 0), (-1, 1),
-            ( 0, -1),          ( 0, 1),
-            ( 1, -1), ( 1, 0), ( 1, 1),
-        ]),
-        (Piece::BlackKing, vec![
-            (-1, -1), (-1, 0), (-1, 1),
-            ( 0, -1),          ( 0, 1),
-            ( 1, -1), ( 1, 0), ( 1, 1),
-        ]),
-        (Piece::WhiteKnight, vec![
-            (-2, -1), (-2,  1), (-1, -2), (-1, 2),
-            ( 1, -2), ( 1,  2), ( 2, -1), ( 2, 1),
-        ]),
-        (Piece::BlackKnight, vec![
-            (-2, -1), (-2,  1), (-1, -2), (-1, 2),
-            ( 1, -2), ( 1,  2), ( 2, -1), ( 2, 1),
-        ]),
-        // Pawns require special logic and are generally excluded from simple MOVE maps
-    ]);
+lazy_static! {
+    static ref MOVES: HashMap<PieceType, Vec<(i8, i8)>> = {
+        let mut m = HashMap::new();
+        m.insert(
+            PieceType::King,
+            vec![
+                (-1, -1),
+                (-1, 0),
+                (-1, 1),
+                (0, -1),
+                (0, 1),
+                (1, -1),
+                (1, 0),
+                (1, 1),
+            ],
+        );
+        m.insert(
+            PieceType::Knight,
+            vec![
+                (-2, -1),
+                (-2, 1),
+                (-1, -2),
+                (-1, 2),
+                (1, -2),
+                (1, 2),
+                (2, -1),
+                (2, 1),
+            ],
+        );
+        m
+    };
 }
 
 fn generate_sliding_moves(
-    board: &[[Piece; 8]; 8],
+    board: &[[Option<Piece>; 8]; 8],
     piece: Piece,
     start: (usize, usize),
     directions: &[(i8, i8)],
 ) -> Vec<(usize, usize)> {
-    let mut result: Vec<(usize, usize)> = Vec::new();
+    let mut result = Vec::new();
     let (start_row, start_col) = (start.0 as i8, start.1 as i8);
 
     for &(dr, dc) in directions {
@@ -108,15 +101,15 @@ fn generate_sliding_moves(
         while (0..8).contains(&r) && (0..8).contains(&c) {
             let r_usize = r as usize;
             let c_usize = c as usize;
-            let target = board[r_usize][c_usize];
 
-            if target == Piece::Empty {
-                result.push((r_usize, c_usize));
-            } else {
-                if piece.is_white() != target.is_white() {
-                    result.push((r_usize, c_usize));
+            match board[r_usize][c_usize] {
+                None => result.push((r_usize, c_usize)), // Empty square
+                Some(target_piece) => {
+                    if piece.color != target_piece.color {
+                        result.push((r_usize, c_usize)); // Capture enemy piece
+                    }
+                    break; // Stop at first occupied square
                 }
-                break;
             }
 
             r += dr;
@@ -128,29 +121,29 @@ fn generate_sliding_moves(
 }
 
 fn generate_pawn_moves(
-    board: &[[Piece; 8]; 8],
+    board: &[[Option<Piece>; 8]; 8],
     piece: Piece,
     start: (usize, usize),
 ) -> Vec<(usize, usize)> {
     let mut moves = Vec::new();
     let (row, col) = start;
 
-    let (dir, start_row) = match piece {
-        Piece::WhitePawn => (-1, 6),
-        Piece::BlackPawn => (1, 1),
+    let (dir, start_row) = match (piece.color, piece._type) {
+        (Color::White, PieceType::Pawn) => (-1, 6),
+        (Color::Black, PieceType::Pawn) => (1, 1),
         _ => return moves,
     };
 
     let new_row = row as i8 + dir;
     if (0..8).contains(&new_row) {
         // Forward 1
-        if board[new_row as usize][col] == Piece::Empty {
+        if board[new_row as usize][col].is_none() {
             moves.push((new_row as usize, col));
 
             // Forward 2 from starting row
             if row == start_row {
                 let two_row = row as i8 + 2 * dir;
-                if (0..8).contains(&new_row) && board[two_row as usize][col] == Piece::Empty {
+                if (0..8).contains(&new_row) && board[two_row as usize][col].is_none() {
                     moves.push((two_row as usize, col));
                 }
             }
@@ -160,8 +153,10 @@ fn generate_pawn_moves(
         for dc in [-1, 1] {
             let new_col = col as i8 + dc;
             if (0..8).contains(&new_col) {
-                let target = board[new_row as usize][new_col as usize];
-                if target != Piece::Empty && target.is_black() != piece.is_black() {
+                let Some(target) = board[new_row as usize][new_col as usize] else {
+                    continue;
+                };
+                if target.is_black() != piece.is_black() {
                     moves.push((new_row as usize, new_col as usize));
                 }
             }
@@ -172,23 +167,21 @@ fn generate_pawn_moves(
 }
 
 fn get_piece_moves(
-    board: &[[Piece; 8]; 8],
+    board: &[[Option<Piece>; 8]; 8],
     attacks_board: &[[Attacked; 8]; 8],
     piece: Piece,
     pos: (usize, usize),
 ) -> Vec<(usize, usize)> {
-    use Piece::*;
+    match piece._type {
+        PieceType::Pawn => generate_pawn_moves(board, piece, pos),
 
-    match piece {
-        WhitePawn | BlackPawn => generate_pawn_moves(board, piece, pos),
-
-        WhiteRook | BlackRook => {
+        PieceType::Rook => {
             generate_sliding_moves(board, piece, pos, &[(1, 0), (-1, 0), (0, 1), (0, -1)])
         }
-        WhiteBishop | BlackBishop => {
+        PieceType::Bishop => {
             generate_sliding_moves(board, piece, pos, &[(1, 1), (-1, -1), (1, -1), (-1, 1)])
         }
-        WhiteQueen | BlackQueen => generate_sliding_moves(
+        PieceType::Queen => generate_sliding_moves(
             board,
             piece,
             pos,
@@ -203,7 +196,7 @@ fn get_piece_moves(
                 (-1, 1),
             ],
         ),
-        _ => MOVES.get(&piece).map_or(vec![], |deltas| {
+        _ => MOVES.get(&piece._type).map_or(vec![], |deltas| {
             deltas
                 .iter()
                 .filter_map(|(delta_row, delta_column)| {
@@ -213,14 +206,13 @@ fn get_piece_moves(
                         let target = board[row as usize][column as usize];
                         let target_attacked = attacks_board[row as usize][column as usize];
                         let piece_is_white = piece.is_white();
-                        let target_is_white = target.is_white();
+                        let target_is_white = target.is_some_and(|p| p.is_white());
                         let is_safe = !matches!(
                             (piece_is_white, target_attacked),
                             (false, Attacked::ByWhite | Attacked::ByBoth)
                                 | (true, Attacked::ByBlack | Attacked::ByBoth)
                         );
-                        if (target == Piece::Empty || target_is_white != piece_is_white) && is_safe
-                        {
+                        if (target.is_none() || target_is_white != piece_is_white) && is_safe {
                             Some((row as usize, column as usize))
                         } else {
                             None
@@ -233,23 +225,21 @@ fn get_piece_moves(
         }),
     }
 }
-
 impl fmt::Display for Piece {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let symbol = match self {
-            Piece::Empty => "·",
-            Piece::WhiteKing => "♔",
-            Piece::WhiteQueen => "♕",
-            Piece::WhiteRook => "♖",
-            Piece::WhiteBishop => "♗",
-            Piece::WhiteKnight => "♘",
-            Piece::WhitePawn => "♙",
-            Piece::BlackKing => "♚",
-            Piece::BlackQueen => "♛",
-            Piece::BlackRook => "♜",
-            Piece::BlackBishop => "♝",
-            Piece::BlackKnight => "♞",
-            Piece::BlackPawn => "♟︎",
+        let symbol = match (self._type, self.color) {
+            (PieceType::King, Color::White) => "♔",
+            (PieceType::Queen, Color::White) => "♕",
+            (PieceType::Rook, Color::White) => "♖",
+            (PieceType::Bishop, Color::White) => "♗",
+            (PieceType::Knight, Color::White) => "♘",
+            (PieceType::Pawn, Color::White) => "♙",
+            (PieceType::King, Color::Black) => "♚",
+            (PieceType::Queen, Color::Black) => "♛",
+            (PieceType::Rook, Color::Black) => "♜",
+            (PieceType::Bishop, Color::Black) => "♝",
+            (PieceType::Knight, Color::Black) => "♞",
+            (PieceType::Pawn, Color::Black) => "♟︎",
         };
         write!(f, "{}", symbol)
     }
@@ -281,7 +271,7 @@ fn from_letters_to_numbers(input: &str) -> Option<(usize, usize)> {
 // fn is_occupied(board: &[[Piece; 8]; 8], row: usize, col: usize) -> bool {
 //     board[row][col] != Piece::Empty
 // }
-fn recalculate_attacked(board: &[[Piece; 8]; 8], attacks_board: &mut [[Attacked; 8]; 8]) {
+fn recalculate_attacked(board: &[[Option<Piece>; 8]; 8], attacks_board: &mut [[Attacked; 8]; 8]) {
     // Reset the attacks board to Safe
     for row in attacks_board.iter_mut() {
         for cell in row.iter_mut() {
@@ -290,10 +280,10 @@ fn recalculate_attacked(board: &[[Piece; 8]; 8], attacks_board: &mut [[Attacked;
     }
 
     for (row_idx, row) in board.iter().enumerate() {
-        for (col_idx, &piece) in row.iter().enumerate() {
-            if piece == Piece::Empty {
+        for (col_idx, &option_piece) in row.iter().enumerate() {
+            let Some(piece) = option_piece else {
                 continue;
-            }
+            };
 
             let attacks = if piece.is_pawn() {
                 let mut targets = Vec::new();
@@ -346,7 +336,7 @@ fn recalculate_attacked(board: &[[Piece; 8]; 8], attacks_board: &mut [[Attacked;
 }
 
 fn print_board(
-    board: &[[Piece; 8]; 8],
+    board: &[[Option<Piece>; 8]; 8],
     selected: Option<(usize, usize)>,
     moves: Option<&Vec<(usize, usize)>>,
 ) {
@@ -357,12 +347,16 @@ fn print_board(
 
     println!();
 
+    #[allow(clippy::needless_range_loop)]
     for row in 0..8 {
         print!("{} ", 8 - row); // Print rank (8 to 1)
         for col in 0..8 {
             let coord = (row, col);
             let cell = board[row][col];
-            let symbol = format!("{}", cell);
+            let symbol = match cell {
+                Some(piece) => format!("{}", piece),
+                None => "·".to_owned(),
+            };
 
             if Some(coord) == selected {
                 print!("{} {} {}", orange_bg, symbol, reset);
@@ -403,36 +397,91 @@ fn main() {
         [Attacked::Safe; 8], // 1
     ];
 
-    let mut board: [[Piece; 8]; 8] = [
+    let mut board: [[Option<Piece>; 8]; 8] = [
         [
-            Piece::BlackRook,
-            Piece::BlackKnight,
-            Piece::BlackBishop,
-            Piece::BlackQueen,
-            Piece::BlackKing,
-            Piece::BlackBishop,
-            Piece::BlackKnight,
-            Piece::BlackRook,
+            Some(Piece {
+                _type: PieceType::Rook,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Knight,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Bishop,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Queen,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::King,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Bishop,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Knight,
+                color: Color::Black,
+            }),
+            Some(Piece {
+                _type: PieceType::Rook,
+                color: Color::Black,
+            }),
         ],
-        [Piece::BlackPawn; 8],
-        [Piece::Empty; 8],
-        [Piece::Empty; 8],
-        [Piece::Empty; 8],
-        [Piece::Empty; 8],
-        [Piece::WhitePawn; 8],
+        [Some(Piece {
+            _type: PieceType::Pawn,
+            color: Color::Black,
+        }); 8],
+        [None; 8],
+        [None; 8],
+        [None; 8],
+        [None; 8],
+        [Some(Piece {
+            _type: PieceType::Pawn,
+            color: Color::White,
+        }); 8],
         [
-            Piece::WhiteRook,
-            Piece::WhiteKnight,
-            Piece::WhiteBishop,
-            Piece::WhiteQueen,
-            Piece::WhiteKing,
-            Piece::WhiteBishop,
-            Piece::WhiteKnight,
-            Piece::WhiteRook,
+            Some(Piece {
+                _type: PieceType::Rook,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Knight,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Bishop,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Queen,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::King,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Bishop,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Knight,
+                color: Color::White,
+            }),
+            Some(Piece {
+                _type: PieceType::Rook,
+                color: Color::White,
+            }),
         ],
     ];
+
     recalculate_attacked(&board, &mut attacks_board);
-    let mut turn = Turn::Black;
+    let mut turn = Turn::White;
     print_board(&board, None, None);
 
     loop {
@@ -463,12 +512,13 @@ fn main() {
                 }
 
                 if let Some((row, col)) = from_letters_to_numbers(input) {
-                    let piece = board[row][col];
-                    let is_white = piece.is_white();
-                    if piece == Piece::Empty {
+                    let cell = board[row][col];
+                    let is_white = cell.is_some_and(|p| p.is_white());
+                    let Some(piece) = cell else {
                         println!("There's no piece on that square.");
                         continue;
-                    }
+                    };
+
                     if (turn == Turn::White && !is_white) || (turn == Turn::Black && is_white) {
                         println!("{piece}");
                         println!("That piece belongs to the opponent.");
@@ -524,8 +574,8 @@ fn main() {
                 if let Some((dest_row, dest_col)) = from_letters_to_numbers(dest_input.trim()) {
                     if moves.contains(&(dest_row, dest_col)) {
                         // Execute move
-                        board[dest_row][dest_col] = piece;
-                        board[selected_row][selected_col] = Piece::Empty;
+                        board[dest_row][dest_col] = Some(piece);
+                        board[selected_row][selected_col] = None;
                         recalculate_attacked(&board, &mut attacks_board);
                         break;
                     } else {
