@@ -24,6 +24,13 @@ enum PieceType {
     Pawn,
 }
 
+#[derive(Clone, Copy)]
+struct LastMove {
+    from: (usize, usize),
+    to: (usize, usize),
+    piece: Piece,
+}
+
 impl Turn {
     fn toggle(self) -> Turn {
         match self {
@@ -41,10 +48,6 @@ struct Piece {
 impl Piece {
     fn is_white(&self) -> bool {
         self.color == Color::White
-    }
-
-    fn is_black(&self) -> bool {
-        self.color == Color::Black
     }
 
     fn is_pawn(&self) -> bool {
@@ -124,11 +127,13 @@ fn generate_pawn_moves(
     board: &[[Option<Piece>; 8]; 8],
     piece: Piece,
     start: (usize, usize),
+    viable_en_passant: bool,
 ) -> Vec<(usize, usize)> {
     let mut moves = Vec::new();
     let (row, col) = start;
+    let our_color = piece.color;
 
-    let (dir, start_row) = match (piece.color, piece._type) {
+    let (dir, start_row) = match (our_color, piece._type) {
         (Color::White, PieceType::Pawn) => (-1, 6),
         (Color::Black, PieceType::Pawn) => (1, 1),
         _ => return moves,
@@ -136,28 +141,54 @@ fn generate_pawn_moves(
 
     let new_row = row as i8 + dir;
     if (0..8).contains(&new_row) {
+        let new_row_usize = new_row as usize;
+
         // Forward 1
-        if board[new_row as usize][col].is_none() {
-            moves.push((new_row as usize, col));
+        if board[new_row_usize][col].is_none() {
+            moves.push((new_row_usize, col));
 
             // Forward 2 from starting row
             if row == start_row {
                 let two_row = row as i8 + 2 * dir;
-                if (0..8).contains(&new_row) && board[two_row as usize][col].is_none() {
+                if (0..8).contains(&two_row) && board[two_row as usize][col].is_none() {
                     moves.push((two_row as usize, col));
                 }
             }
         }
 
-        // Captures
+        // Diagonal captures
         for dc in [-1, 1] {
             let new_col = col as i8 + dc;
             if (0..8).contains(&new_col) {
-                let Some(target) = board[new_row as usize][new_col as usize] else {
-                    continue;
-                };
-                if target.is_black() != piece.is_black() {
-                    moves.push((new_row as usize, new_col as usize));
+                let new_col_usize = new_col as usize;
+                match board[new_row_usize][new_col_usize] {
+                    Some(target_piece) if target_piece.color != our_color => {
+                        moves.push((new_row_usize, new_col_usize));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // En passant (only valid on the 5th rank for white, 4th for black)
+    let en_passant_row = match our_color {
+        Color::White => 3,
+        Color::Black => 4,
+    };
+
+    if viable_en_passant && row == en_passant_row {
+        for dc in [-1, 1] {
+            let new_col = col as i8 + dc;
+            if (0..8).contains(&new_col) {
+                let adj_col = new_col as usize;
+                match board[row][adj_col] {
+                    Some(adj_piece)
+                        if adj_piece._type == PieceType::Pawn && adj_piece.color != our_color =>
+                    {
+                        moves.push(((row as i8 + dir) as usize, adj_col));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -171,9 +202,10 @@ fn get_piece_moves(
     attacks_board: &[[Attacked; 8]; 8],
     piece: Piece,
     pos: (usize, usize),
+    viable_en_passant: bool,
 ) -> Vec<(usize, usize)> {
     match piece._type {
-        PieceType::Pawn => generate_pawn_moves(board, piece, pos),
+        PieceType::Pawn => generate_pawn_moves(board, piece, pos, viable_en_passant),
 
         PieceType::Rook => {
             generate_sliding_moves(board, piece, pos, &[(1, 0), (-1, 0), (0, 1), (0, -1)])
@@ -314,7 +346,7 @@ fn recalculate_attacked(board: &[[Option<Piece>; 8]; 8], attacks_board: &mut [[A
                 };
                 (targets, attacked_by)
             } else {
-                let moves = get_piece_moves(board, attacks_board, piece, (row_idx, col_idx));
+                let moves = get_piece_moves(board, attacks_board, piece, (row_idx, col_idx), false);
                 let attacked_by = if piece.is_white() {
                     Attacked::ByWhite
                 } else {
@@ -396,7 +428,7 @@ fn main() {
         [Attacked::Safe; 8], // 2
         [Attacked::Safe; 8], // 1
     ];
-
+    let mut last_move: Option<LastMove> = None;
     let mut board: [[Option<Piece>; 8]; 8] = [
         [
             Some(Piece {
@@ -525,7 +557,25 @@ fn main() {
                         continue;
                     }
 
-                    let legal_moves = get_piece_moves(&board, &attacks_board, piece, (row, col));
+                    // add here viable_en_passant variable for get_piece_moves
+
+                    let viable_en_passant = match last_move {
+                        Some(LastMove { from, to, piece }) if piece._type == PieceType::Pawn => {
+                            // Moved two tiles forward?
+                            (from.0 as isize - to.0 as isize).abs() == 2
+                                && (to.0 == row) // same row as us
+                                && ((to.1 as isize - col as isize).abs() == 1) // adjacent file
+                        }
+                        _ => false,
+                    };
+
+                    let legal_moves = get_piece_moves(
+                        &board,
+                        &attacks_board,
+                        piece,
+                        (row, col),
+                        viable_en_passant,
+                    );
                     if legal_moves.is_empty() {
                         println!("That piece has no legal moves.");
                         continue;
@@ -548,6 +598,7 @@ fn main() {
             (b'A' + selected_col as u8) as char,
             8 - selected_row
         );
+
         println!(
             "Possible moves: {:?}",
             moves
@@ -573,9 +624,31 @@ fn main() {
 
                 if let Some((dest_row, dest_col)) = from_letters_to_numbers(dest_input.trim()) {
                     if moves.contains(&(dest_row, dest_col)) {
+                        // Check for en passant
+                        let is_en_passant = piece._type == PieceType::Pawn
+                            && board[dest_row][dest_col].is_none()
+                            && selected_col != dest_col;
+
+                        if is_en_passant {
+                            // Remove the captured pawn
+                            let captured_row = if turn == Turn::White {
+                                dest_row + 1
+                            } else {
+                                dest_row - 1
+                            };
+                            board[captured_row][dest_col] = None;
+                        }
+
                         // Execute move
                         board[dest_row][dest_col] = Some(piece);
                         board[selected_row][selected_col] = None;
+
+                        last_move = Some(LastMove {
+                            from: (selected_row, selected_col),
+                            to: (dest_row, dest_col),
+                            piece,
+                        });
+
                         recalculate_attacked(&board, &mut attacks_board);
                         break;
                     } else {
